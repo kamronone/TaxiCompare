@@ -7,18 +7,30 @@ import "./style.css";
 
 type Point = {lat:number;lon:number;label:string};
 type Quote = {id:string;name:string;price:number|null;eta:number|null;type:string;url:string;routePrefilled:boolean};
-type Route = {distance_km:number;duration_min:number;geometry:[number,number][];quotes:Quote[]};
+type Route = {distance_km:number|null;duration_min:number|null;geometry:[number,number][];quotes:Quote[];offline?:boolean};
 const places:Point[] = [
  {lat:41.3111,lon:69.2797,label:"Сквер Амира Темура"},
  {lat:41.2826,lon:69.2703,label:"Аэропорт Ташкента"},
  {lat:41.3261,lon:69.2280,label:"Чорсу"},
  {lat:41.3388,lon:69.2852,label:"Юнусабад"}
 ];
-const base=import.meta.env.VITE_API_BASE || "";
+const base="";
 async function request<T>(path:string,init?:RequestInit):Promise<T>{
- const response=await fetch(base+path,init);
+ const controller=new AbortController();
+ const timer=setTimeout(()=>controller.abort(),12000);
+ let response:Response;
+ try{response=await fetch(base+path,{...init,signal:controller.signal});}
+ catch{throw new Error("Не удалось связаться с сервером. Проверьте интернет.");}
+ finally{clearTimeout(timer);}
  if(!response.ok){const detail=await response.json().catch(()=>({detail:"Ошибка сервера"}));throw new Error(detail.detail||"Ошибка сети");}
  return response.json();
+}
+function fallbackRoute(a:Point,b:Point):Route{
+ const makeLink=()=>{const url=new URL("https://3.redirect.appmetrica.yandex.com/route");url.searchParams.set("start-lat",String(a.lat));url.searchParams.set("start-lon",String(a.lon));url.searchParams.set("end-lat",String(b.lat));url.searchParams.set("end-lon",String(b.lon));url.searchParams.set("tariffClass","econom");url.searchParams.set("lang","ru");return url.toString();};
+ return {distance_km:null,duration_min:null,geometry:[],offline:true,quotes:[
+ {id:"yandex",name:"Yandex Go",price:null,eta:null,type:"unavailable",url:makeLink(),routePrefilled:true},
+ {id:"uklon",name:"Uklon",price:null,eta:null,type:"unavailable",url:"https://uz.uklon.eu/",routePrefilled:false},
+ {id:"mytaxi",name:"MyTaxi",price:null,eta:null,type:"unavailable",url:"https://mytaxi.uz/",routePrefilled:false}]};
 }
 function ClickMap({pick}:{pick:(lat:number,lon:number)=>void}){useMapEvents({click:e=>pick(e.latlng.lat,e.latlng.lng)});return null;}
 function View({a,b}:{a:Point|null;b:Point|null}){const map=useMap();React.useEffect(()=>{
@@ -43,8 +55,8 @@ function App(){
  title:"Bitta yo‘nalish. Eng yaxshi tanlov.",subtitle:"Toshkent bo‘ylab taksi xizmatlarini bir joyda ko‘ring.",from:"Qayerdan",to:"Qayerga",locate:"Mening joylashuvim",compare:"Taksilarni solishtirish",refresh:"Yangilash",search:"Manzilni izlash",map:"Nuqtani belgilash uchun xaritaga bosing",noPrice:"Narx hozircha mavjud emas",open:"Xizmatni ochish",openRoute:"Narxni tekshirish va buyurtma berish",notice:"Hozircha operatorlarning haqiqiy narxlari ulanmagan. Buyurtmadan oldin narxni tekshiring.",manual:"Yo‘nalishni xizmatda qaytadan kiritish kerak."
  };
  function select(p:Point){target==="a"?setA(p):setB(p);setRoute(null);setEditing(false);setResults([]);}
- async function find(){if(search.trim().length<3)return;setBusy(true);setError("");try{const data=await request<{results:Point[]}>(`/api/places?q=${encodeURIComponent(search.trim())}`);setResults(data.results);if(!data.results.length)setError("Адрес не найден");}catch(e){setError(String((e as Error).message));}finally{setBusy(false);}}
- async function compare(){if(!a||!b)return;setBusy(true);setError("");try{setRoute(await request<Route>("/api/compare",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({from:a,to:b})}));}catch(e){setError(String((e as Error).message));}finally{setBusy(false);}}
+ async function find(){if(search.trim().length<3)return;setBusy(true);setError("");try{const data=await request<{results:Point[]}>(`/api/places?q=${encodeURIComponent(search.trim())}`);setResults(data.results);if(!data.results.length)setError("Адрес не найден");}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+ async function compare(){if(!a||!b)return;if(Math.hypot(a.lat-b.lat,a.lon-b.lon)<0.00015){setRoute(null);setError(lang==="ru"?"Точки А и Б совпадают. Выберите разные адреса.":"A va B nuqtalari bir xil. Boshqa manzilni tanlang.");return;}setBusy(true);setError("");try{setRoute(await request<Route>("/api/compare",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({from:a,to:b})}));}catch{setRoute(fallbackRoute(a,b));setError(lang==="ru"?"Сервис маршрутов временно недоступен. Можно открыть такси, но расстояние и время не рассчитаны.":"Yo‘nalish xizmati vaqtincha ishlamayapti. Taksi ilovasini ochishingiz mumkin, ammo masofa va vaqt hisoblanmadi.");}finally{setBusy(false);}}
  function locate(){navigator.geolocation?.getCurrentPosition(p=>{setA({lat:p.coords.latitude,lon:p.coords.longitude,label:lang==="ru"?"Моё местоположение":"Mening joylashuvim"});setRoute(null);},()=>setError("Нет доступа к геолокации"),{enableHighAccuracy:true,timeout:10000});}
  return <div className="app">
  <header><div className="logo"><span>🚕</span> TaxiCompare <b>UZ</b></div><div className="header-right"><span>📍 Tashkent</span><button onClick={()=>setLang(lang==="ru"?"uz":"ru")}>{lang==="ru"?"UZ":"RU"}</button></div></header>
@@ -58,7 +70,7 @@ function App(){
  <div className="tools"><button onClick={locate}>⌖ {labels.locate}</button><button onClick={()=>setTarget(target==="a"?"b":"a")}>📍 {target==="a"?"A":"B"}</button></div>
  <button className="main-button" disabled={!a||!b||busy} onClick={compare}>{busy?"Загрузка…":route?labels.refresh:labels.compare} →</button>
  {error&&<p className="error" role="alert">{error}</p>}
- {route&&<div className="comparison"><div className="summary"><small>МАРШРУТ</small><h2>{route.distance_km.toFixed(1)} км · ~{Math.round(route.duration_min)} мин</h2></div>
+ {route&&<div className="comparison"><div className="summary"><small>МАРШРУТ</small><h2>{route.offline || route.distance_km==null || route.duration_min==null ? (lang==="ru"?"Расстояние пока недоступно":"Masofa hozircha mavjud emas") : `${route.distance_km.toFixed(1)} км · ~${Math.round(route.duration_min)} мин`}</h2></div>
  {route.quotes.map(q=><article key={q.id}><div className="operator"><span className="operator-icon">{q.name[0]}</span><div><strong>{q.name}</strong><small>{q.price==null?labels.noPrice:new Intl.NumberFormat("ru-RU").format(q.price)+" сум"}</small></div></div><a href={q.url} target="_blank" rel="noopener noreferrer">{q.routePrefilled?labels.openRoute:labels.open} ↗</a>{!q.routePrefilled&&<small>{labels.manual}</small>}</article>)}
  <div className="notice">ⓘ {labels.notice}</div></div>}
  <p className="privacy">🔒 Без регистрации · Никаких автоматических заказов</p>
