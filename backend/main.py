@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 app = FastAPI(title="TaxiCompare UZ API", version="0.1.0")
 origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
-app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET","POST"], allow_headers=["Content-Type"])
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_origin_regex=r"https://[a-zA-Z0-9-]+\\.vercel\\.app", allow_methods=["GET","POST"], allow_headers=["Content-Type"])
 
 class Point(BaseModel):
     lat: float = Field(ge=-90, le=90)
